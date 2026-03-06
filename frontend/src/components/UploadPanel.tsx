@@ -8,6 +8,8 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { uploadFile, pollJobUntilDone } from '../api/client';
 import type { JobStatus } from '../api/client';
+import bitmarkLogo from '../assets/bitmark_logo_2024@1x.png.webp';
+import remeersLogo from '../assets/reemers_logo_transparent.png';
 
 interface Props {
   onJobDone: (job: JobStatus) => void;
@@ -173,6 +175,18 @@ export function UploadPanel({ onJobDone }: Props) {
                   <p style={styles.stepDesc}>{step.desc}</p>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Partners ── */}
+        {!isProcessing && (
+          <div style={styles.partnersSection}>
+            <p style={styles.partnersTitle}>Partners</p>
+            <div style={styles.partnersRow}>
+              <img src={bitmarkLogo} alt="Bitmark Association" style={styles.partnerLogo} />
+              <div style={styles.partnerDivider} />
+              <img src={remeersLogo} alt="Remeers" style={styles.partnerLogo} />
             </div>
           </div>
         )}
@@ -372,6 +386,37 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#666',
     lineHeight: 1.4,
     margin: 0,
+  },
+  partnersSection: {
+    background: '#fff',
+    borderRadius: 16,
+    boxShadow: '0 4px 24px rgba(26,35,126,0.08)',
+    padding: '16px 24px 20px',
+    textAlign: 'center',
+  },
+  partnersTitle: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#bbb',
+    textTransform: 'uppercase',
+    letterSpacing: '0.1em',
+    margin: '0 0 14px',
+  },
+  partnersRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 20,
+  },
+  partnerLogo: {
+    height: 44,
+    width: 'auto',
+    objectFit: 'contain',
+  },
+  partnerDivider: {
+    width: 1,
+    height: 28,
+    background: '#e0e0e0',
   },
 };
 

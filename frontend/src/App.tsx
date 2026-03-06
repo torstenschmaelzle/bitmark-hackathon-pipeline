@@ -13,9 +13,6 @@ import { BitmarkSettingsPage } from './pages/BitmarkSettingsPage';
 import { EditBitmarkPage } from './pages/EditBitmarkPage';
 import type { JobStatus } from './api/client';
 
-import bitmarkLogo from './assets/bitmark-logo.svg';
-import getmorebrainLogo from './assets/getmorebrain-logo.svg';
-import remeersLogo from './assets/remeers-logo.svg';
 
 // ---------------------------------------------------------------------------
 // Hash routing helpers
@@ -77,15 +74,6 @@ export default function App() {
         <a href="#/" style={styles.logoLink}>
           <span style={styles.appTitle}>Bitmark Document Pipeline</span>
         </a>
-
-        {/* Center: partner logos (shown on all pages) */}
-        <div style={styles.partnerLogos}>
-          <img src={bitmarkLogo}      alt="Bitmark Association" style={styles.partnerLogo} />
-          <div style={styles.logoDivider} />
-          <img src={getmorebrainLogo} alt="Get More Brain"      style={styles.partnerLogo} />
-          <div style={styles.logoDivider} />
-          <img src={remeersLogo}      alt="Remeers"             style={styles.partnerLogo} />
-        </div>
 
         {/* Right: nav */}
         <nav style={styles.nav}>
@@ -175,24 +163,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: '-0.01em',
     whiteSpace: 'nowrap',
-  },
-  partnerLogos: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  partnerLogo: {
-    height: 36,
-    width: 'auto',
-    borderRadius: 6,
-    objectFit: 'contain',
-  },
-  logoDivider: {
-    width: 1,
-    height: 24,
-    background: 'rgba(255,255,255,0.2)',
   },
   nav: {
     display: 'flex',

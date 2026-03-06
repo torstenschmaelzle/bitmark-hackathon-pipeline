@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python3 -c \"\nimport ast, pathlib\nfor p in ['app/adapters/pdf_adapter.py','app/pipeline/heuristics.py','app/pipeline/bitmark_export.py']:\n    try:\n        ast.parse\\(pathlib.Path\\(p\\).read_text\\(\\)\\)\n        print\\(f'OK  {p}'\\)\n    except SyntaxError as e:\n        print\\(f'ERR {p}: {e}'\\)\n\")",
-      "Bash(cd /Users/torstenschmaelzle/Documents/BitmarkHackathon/frontend && node_modules/.bin/tsc --noEmit 2>&1 | head -40)"
+      "Bash(cd /Users/torstenschmaelzle/Documents/BitmarkHackathon/frontend && node_modules/.bin/tsc --noEmit 2>&1 | head -40)",
+      "WebFetch(domain:docs.bitmark.cloud)"
     ]
   }
 }

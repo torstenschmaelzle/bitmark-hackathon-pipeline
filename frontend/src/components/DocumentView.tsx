@@ -4,11 +4,12 @@
  * Continuous reading-order document rendering with:
  * - Per-label background fill + left border
  * - Inline annotation highlighting for cross-references (even inside list items)
+ * - Clickable reference tokens ([1]) that scroll to the matching reference entry
  * - Style overrides read from localStorage (set via BitmarkSettingsPage)
  * - Segment-based text renderer that merges span formatting + annotation ranges
  */
 
-import React, { useMemo } from 'react';
+import React, { createContext, useContext, useMemo, useState } from 'react';
 import type { Block, Span } from '../types/canonical';
 import type { CanonicalDoc } from '../types/canonical';
 import type { ClassificationDoc, ClassifiedBlock, ElementLabel, SpanAnnotation } from '../types/classification';
@@ -37,6 +38,57 @@ interface Segment {
 }
 
 // ---------------------------------------------------------------------------
+// Reference-click context
+// ---------------------------------------------------------------------------
+
+interface DocCtxType {
+  onAnnotationClick: (ann: SpanAnnotation) => void;
+}
+
+const DocCtx = createContext<DocCtxType>({ onAnnotationClick: () => {} });
+
+// ---------------------------------------------------------------------------
+// Reference index builder
+// Scans canonical blocks to find the References/Bibliography section and
+// maps entry numbers → block_ids so clicks can scroll there.
+// ---------------------------------------------------------------------------
+
+function buildRefIndex(
+  canonical: CanonicalDoc,
+  classification: ClassificationDoc,
+): Record<string, string> {
+  const cbLabels: Record<string, string> = {};
+  for (const cb of classification.blocks ?? []) cbLabels[cb.block_id] = cb.label;
+
+  const index: Record<string, string> = {};
+  let inRefSection = false;
+  const refSectionRe = /^(references|bibliography|works cited|further reading)$/i;
+  // Matches: [1] or 1. or 1) at start of text
+  const entryRe = /^\s*\[(\d+)\]|^\s*(\d+)[.)]\s/;
+
+  for (const block of canonical.blocks ?? []) {
+    const label = cbLabels[block.block_id] ?? '';
+    if (label === 'heading_1' || label === 'heading_2' || label === 'heading_3') {
+      inRefSection = refSectionRe.test(block.text.trim());
+      continue;
+    }
+    if (inRefSection) {
+      const m = block.text.match(entryRe);
+      if (m) {
+        const key = (m[1] ?? m[2]).trim();
+        index[key] = block.block_id;
+      }
+    }
+  }
+  return index;
+}
+
+/** Strip surrounding brackets/punctuation from a reference target string */
+function normalizeRefKey(s: string): string {
+  return s.replace(/^\[(\d+)\]$/, '$1').replace(/^(\d+)[.)]\s*$/, '$1').trim();
+}
+
+// ---------------------------------------------------------------------------
 // Label sets
 // ---------------------------------------------------------------------------
 
@@ -53,7 +105,6 @@ function buildSegments(block: Block, annotations: SpanAnnotation[]): Segment[] {
   const text = block.text;
   if (!text) return [];
 
-  // Collect all boundary positions from spans and annotations
   const breaks = new Set<number>([0, text.length]);
   let pos = 0;
   for (const span of block.spans ?? []) {
@@ -68,7 +119,6 @@ function buildSegments(block: Block, annotations: SpanAnnotation[]): Segment[] {
     }
   }
 
-  // Build char-level formatting arrays from spans
   const boldAt    = new Uint8Array(text.length);
   const italicAt  = new Uint8Array(text.length);
   const hrefAt: (string | null)[] = new Array(text.length).fill(null);
@@ -76,9 +126,9 @@ function buildSegments(block: Block, annotations: SpanAnnotation[]): Segment[] {
   for (const span of block.spans ?? []) {
     const end = Math.min(pos + span.text.length, text.length);
     for (let i = pos; i < end; i++) {
-      if (span.bold)  boldAt[i]   = 1;
+      if (span.bold)   boldAt[i]   = 1;
       if (span.italic) italicAt[i] = 1;
-      if (span.href)  hrefAt[i]   = span.href;
+      if (span.href)   hrefAt[i]   = span.href;
     }
     pos += span.text.length;
   }
@@ -94,9 +144,9 @@ function buildSegments(block: Block, annotations: SpanAnnotation[]): Segment[] {
     const ann = (annotations ?? []).find(a => a.start <= start && a.end >= end);
     segments.push({
       text: text.slice(start, end),
-      bold:  boldAt[start]  === 1,
+      bold:   boldAt[start]   === 1,
       italic: italicAt[start] === 1,
-      href:  hrefAt[start],
+      href:   hrefAt[start],
       annotation: ann,
     });
   }
@@ -108,6 +158,8 @@ function buildSegments(block: Block, annotations: SpanAnnotation[]): Segment[] {
 // ---------------------------------------------------------------------------
 
 function SegmentView({ seg, idx }: { seg: Segment; idx: number }) {
+  const { onAnnotationClick } = useContext(DocCtx);
+
   let node: React.ReactNode = seg.text;
 
   if (seg.bold && seg.italic) node = <strong><em>{node}</em></strong>;
@@ -120,16 +172,17 @@ function SegmentView({ seg, idx }: { seg: Segment; idx: number }) {
 
   if (seg.annotation) {
     const ann = seg.annotation;
-    const title = `${ann.target_kind}: ${ann.normalized_target} (${Math.round(ann.confidence * 100)}%)`;
+    const title = `Click to jump to: ${ann.normalized_target} (${ann.target_kind}, ${Math.round(ann.confidence * 100)}%)`;
     node = (
       <mark
         title={title}
+        onClick={() => onAnnotationClick(ann)}
         style={{
           background: '#FFF176',
           borderBottom: '2px solid #F57F17',
           borderRadius: 2,
           padding: '0 1px',
-          cursor: 'help',
+          cursor: 'pointer',
           fontStyle: 'inherit',
         }}
       >
@@ -178,7 +231,7 @@ function AnnotationChips({ annotations }: { annotations: SpanAnnotation[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Block wrapper
+// Block wrapper — adds block_id as DOM id for scroll targeting
 // ---------------------------------------------------------------------------
 
 function LabelPill({ label, confidence }: { label: ElementLabel; confidence: number }) {
@@ -207,14 +260,14 @@ function blockBaseStyle(label: ElementLabel): React.CSSProperties {
 }
 
 function BlockWrap({
-  m, children, extraStyle,
-}: { m: MergedBlock; children: React.ReactNode; extraStyle?: React.CSSProperties }) {
+  m, children,
+}: { m: MergedBlock; children: React.ReactNode }) {
   const { block, cb } = m;
   const styleSettings = loadStyleSettings();
   const override = overrideToCss(styleSettings[cb.label] ?? {});
   const title = `${cb.label} (${Math.round(cb.confidence * 100)}%)\n${cb.evidence.join(' · ')}`;
   return (
-    <div style={{ ...blockBaseStyle(cb.label), ...override }} title={title}>
+    <div id={`block-${block.block_id}`} style={{ ...blockBaseStyle(cb.label), ...override }} title={title}>
       <LabelPill label={cb.label} confidence={cb.confidence} />
       {children}
     </div>
@@ -259,7 +312,7 @@ function renderSingle(m: MergedBlock): React.ReactNode {
       );
     case 'footnote':
       return (
-        <BlockWrap key={block.block_id} m={m} extraStyle={{ marginLeft: 24 }}>
+        <BlockWrap key={block.block_id} m={m}>
           <p style={{ fontSize: '0.8em', margin: '2px 0', color: '#555', lineHeight: 1.5, paddingRight: 80, ...override }}>
             {content}
           </p>
@@ -330,18 +383,23 @@ function renderListGroup(group: Extract<RenderItem, { kind: 'list' }>, idx: numb
           const content = renderContent(m.block, anns);
           const title = `${m.cb.label} (${Math.round(m.cb.confidence * 100)}%)\n${m.cb.evidence.join(' · ')}`;
           return (
-            <li key={m.block.block_id} title={title} style={{
-              background: LABEL_BG[m.cb.label] ?? '#fafafa',
-              borderLeft: `4px solid ${LABEL_BORDER[m.cb.label] ?? '#ccc'}`,
-              borderRadius: 3,
-              padding: '3px 10px 3px 28px',
-              marginBottom: 2,
-              marginLeft: isNested ? 24 : 0,
-              position: 'relative',
-              lineHeight: 1.6,
-              listStyle: isNumbered ? 'decimal' : 'disc',
-              listStylePosition: 'inside',
-            }}>
+            <li
+              id={`block-${m.block.block_id}`}
+              key={m.block.block_id}
+              title={title}
+              style={{
+                background: LABEL_BG[m.cb.label] ?? '#fafafa',
+                borderLeft: `4px solid ${LABEL_BORDER[m.cb.label] ?? '#ccc'}`,
+                borderRadius: 3,
+                padding: '3px 10px 3px 28px',
+                marginBottom: 2,
+                marginLeft: isNested ? 24 : 0,
+                position: 'relative',
+                lineHeight: 1.6,
+                listStyle: isNumbered ? 'decimal' : 'disc',
+                listStylePosition: 'inside',
+              }}
+            >
               <span style={{ position: 'absolute', top: 3, right: 5, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', opacity: 0.6, color: LABEL_COLORS[m.cb.label]?.text ?? '#333' }}>
                 {m.cb.label}
               </span>
@@ -378,7 +436,7 @@ function renderTableGroup(group: Extract<RenderItem, { kind: 'table' }>, idx: nu
               const isHeader = m.cb.label === 'table_header_row';
               const CellTag = isHeader ? 'th' : 'td';
               return (
-                <tr key={m.block.block_id} style={{ background: LABEL_BG[m.cb.label] ?? '#E0F7FA' }} title={`${m.cb.label} (${Math.round(m.cb.confidence * 100)}%)`}>
+                <tr key={m.block.block_id} id={`block-${m.block.block_id}`} style={{ background: LABEL_BG[m.cb.label] ?? '#E0F7FA' }} title={`${m.cb.label} (${Math.round(m.cb.confidence * 100)}%)`}>
                   {cells.map((cell, ci) => (
                     <CellTag key={ci} style={{ border: `1px solid ${LABEL_BORDER[m.cb.label] ?? '#ccc'}`, padding: '5px 8px', textAlign: 'left', fontWeight: isHeader ? 700 : 400 }}>
                       {cell.trim()}
@@ -392,7 +450,7 @@ function renderTableGroup(group: Extract<RenderItem, { kind: 'table' }>, idx: nu
       ) : (
         <div style={{ background: LABEL_BG['table'], borderLeft: `4px solid ${LABEL_BORDER['table']}`, borderRadius: 3, padding: '8px 10px', fontSize: '0.85em' }}>
           <div style={{ fontSize: '0.8em', color: '#546e7a', marginBottom: 4, fontStyle: 'italic' }}>table — cell structure not available</div>
-          {rows.map(m => <pre key={m.block.block_id} style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, lineHeight: 1.5 }}>{m.block.text}</pre>)}
+          {rows.map(m => <pre key={m.block.block_id} id={`block-${m.block.block_id}`} style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, lineHeight: 1.5 }}>{m.block.text}</pre>)}
         </div>
       )}
     </div>
@@ -450,7 +508,7 @@ function Legend() {
     <div style={{ marginBottom: 12, background: '#fafafa', border: '1px solid #e0e0e0', borderRadius: 8, padding: '10px 14px' }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: '#555', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
         Legend &nbsp;
-        <span style={{ fontWeight: 400, fontSize: 10 }}>hover any block to see label + evidence · <mark style={{ background: '#FFF176', border: '1px solid #F57F17', borderRadius: 2, padding: '0 3px' }}>yellow highlight</mark> = cross-reference</span>
+        <span style={{ fontWeight: 400, fontSize: 10 }}>hover any block to see label + evidence · <mark style={{ background: '#FFF176', border: '1px solid #F57F17', borderRadius: 2, padding: '0 3px' }}>yellow highlight</mark> = cross-reference (click to jump)</span>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
         {ALL_LABELS.map(label => (
@@ -473,6 +531,8 @@ interface Props {
 }
 
 export function DocumentView({ canonical, classification }: Props) {
+  const [notFoundMsg, setNotFoundMsg] = useState<string | null>(null);
+
   const merged = useMemo<MergedBlock[]>(() => {
     const cbMap: Record<string, ClassifiedBlock> = {};
     for (const cb of classification.blocks ?? []) cbMap[cb.block_id] = cb;
@@ -484,23 +544,58 @@ export function DocumentView({ canonical, classification }: Props) {
     return result;
   }, [canonical, classification]);
 
+  const refIndex = useMemo(
+    () => buildRefIndex(canonical, classification),
+    [canonical, classification],
+  );
+
   const renderItems = useMemo(() => groupItems(merged), [merged]);
+
+  function handleAnnotationClick(ann: SpanAnnotation) {
+    const key = normalizeRefKey(ann.normalized_target);
+    const blockId = refIndex[key];
+    if (blockId) {
+      const el = document.getElementById(`block-${blockId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const prev = el.style.outline;
+        el.style.outline = '3px solid #F57F17';
+        el.style.transition = 'outline 0.3s';
+        setTimeout(() => { el.style.outline = prev; }, 1600);
+        return;
+      }
+    }
+    setNotFoundMsg(`Reference target "${ann.normalized_target}" not found`);
+    setTimeout(() => setNotFoundMsg(null), 3000);
+  }
 
   if (renderItems.length === 0) {
     return <p style={{ color: '#c62828', background: '#ffebee', padding: '12px 16px', borderRadius: 8 }}>No blocks to display.</p>;
   }
 
   return (
-    <div>
-      <Legend />
-      <div style={{ fontFamily: "Georgia,'Times New Roman',serif", fontSize: 15, lineHeight: 1.7, color: '#212121', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, padding: '20px 24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        {renderItems.map((item, idx) => {
-          if (item.kind === 'single') return renderSingle(item.m);
-          if (item.kind === 'list')   return renderListGroup(item, idx);
-          if (item.kind === 'table')  return renderTableGroup(item, idx);
-          return null;
-        })}
+    <DocCtx.Provider value={{ onAnnotationClick: handleAnnotationClick }}>
+      <div>
+        {notFoundMsg && (
+          <div style={{
+            background: '#fff3e0', border: '1px solid #FFB300', borderRadius: 6,
+            padding: '6px 14px', marginBottom: 8, fontSize: 13, color: '#e65100',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <span>⚠ {notFoundMsg}</span>
+            <button onClick={() => setNotFoundMsg(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#e65100', fontSize: 15, lineHeight: 1 }}>×</button>
+          </div>
+        )}
+        <Legend />
+        <div style={{ fontFamily: "Georgia,'Times New Roman',serif", fontSize: 15, lineHeight: 1.7, color: '#212121', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, padding: '20px 24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          {renderItems.map((item, idx) => {
+            if (item.kind === 'single') return renderSingle(item.m);
+            if (item.kind === 'list')   return renderListGroup(item, idx);
+            if (item.kind === 'table')  return renderTableGroup(item, idx);
+            return null;
+          })}
+        </div>
       </div>
-    </div>
+    </DocCtx.Provider>
   );
 }
